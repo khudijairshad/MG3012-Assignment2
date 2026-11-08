@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MessageBoard dApp - MG3012 Assignment 2</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <!-- Image element (inline SVG data URI so no extra file is needed) -->
+    <img alt="MessageBoard logo" src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%236366f1'/%3E%3Cpath d='M22 30h56v34H48L34 78V64H22z' fill='white'/%3E%3Ccircle cx='38' cy='47' r='4' fill='%236366f1'/%3E%3Ccircle cx='50' cy='47' r='4' fill='%236366f1'/%3E%3Ccircle cx='62' cy='47' r='4' fill='%236366f1'/%3E%3C/svg%3E">
+    <h1>MessageBoard dApp</h1>
+    <p class="muted">MG3012 Blockchain Technology for Business &middot; Assignment 2 &middot; Sepolia testnet</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>1. Wallet</h2>
+      <button id="connectBtn">Connect MetaMask</button>
+      <p>Account: <span id="account" class="mono">not connected</span></p>
+      <p>Network: <span id="network">-</span></p>
+    </section>
+
+    <section class="card">
+      <h2>2. Current message (read)</h2>
+      <div class="message-box" id="message">Connect your wallet to load the message.</div>
+      <ul>
+        <li>Updates so far: <strong id="count">-</strong></li>
+        <li>Last updated by: <span id="lastUpdater" class="mono">-</span></li>
+      </ul>
+      <button id="refreshBtn" disabled>Refresh</button>
+    </section>
+
+    <section class="card">
+      <h2>3. Post a new message (write)</h2>
+      <p class="muted">This sends a transaction, so MetaMask will ask you to confirm and a small amount of test ETH is used as gas.</p>
+      <input type="text" id="newMessage" maxlength="280" placeholder="Type your message (max 280 characters)">
+      <button id="updateBtn" disabled>Update Message</button>
+      <p id="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card">
+      <h2>About this contract</h2>
+      <p>Contract address: <span id="contractAddr" class="mono"></span></p>
+      <ul>
+        <li><a id="etherscanLink" href="#" target="_blank" rel="noopener">View contract on Sepolia Etherscan</a></li>
+        <li><a href="https://cloud.google.com/application/web3/faucet/ethereum/sepolia" target="_blank" rel="noopener">Get free Sepolia test ETH (Google Cloud faucet)</a></li>
+        <li><a href="https://remix.ethereum.org" target="_blank" rel="noopener">Remix IDE</a></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="muted">
+    <p>Built with Solidity, HTML, CSS, JavaScript and ethers.js.</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
+  <script>
+    // >>> Replace this with your deployed contract address from Remix <<<
+    const CONTRACT_ADDRESS = "0x96b23F496Fb095AAEbb692725c679e9F76cbaC5A";
+    const SEPOLIA_CHAIN_ID = 11155111n;
+
+    const ABI = [
+      "function getMessage() view returns (string)",
+      "function getUpdateCount() view returns (uint256)",
+      "function getLastUpdater() view returns (address)",
+      "function updateMessage(string newMessage)",
+      "event MessageUpdated(address indexed updater, string newMessage, uint256 updateCount)"
+    ];
+
+    const $ = (id) => document.getElementById(id);
+    let provider, signer, contract;
+
+    function setStatus(text, kind) {
+      const s = $("status");
+      s.textContent = text;
+      s.className = kind || "";
+    }
+
+    $("contractAddr").textContent = CONTRACT_ADDRESS;
+    $("etherscanLink").href = "https://sepolia.etherscan.io/address/" + CONTRACT_ADDRESS;
+
+    async function connect() {
+      if (!window.ethereum) {
+        setStatus("MetaMask not found. Please install the extension from metamask.io.", "err");
+        return;
+      }
+      try {
+        provider = new ethers.BrowserProvider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+
+        let net = await provider.getNetwork();
+        if (net.chainId !== SEPOLIA_CHAIN_ID) {
+          try {
+            await provider.send("wallet_switchEthereumChain", [{ chainId: "0xaa36a7" }]);
+          } catch (e) { /* user declined; handled below */ }
+          provider = new ethers.BrowserProvider(window.ethereum);
+          net = await provider.getNetwork();
+        }
+        if (net.chainId !== SEPOLIA_CHAIN_ID) {
+          setStatus("Please switch MetaMask to the Sepolia test network.", "err");
+          return;
+        }
+
+        signer = await provider.getSigner();
+        contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+        $("account").textContent = await signer.getAddress();
+        $("network").textContent = "Sepolia (chainId " + net.chainId + ")";
+        $("connectBtn").textContent = "Connected";
+        $("connectBtn").disabled = true;
+        $("refreshBtn").disabled = false;
+        $("updateBtn").disabled = false;
+        setStatus("", "");
+        await loadMessage();
+      } catch (err) {
+        setStatus("Connection failed: " + (err.shortMessage || err.message), "err");
+      }
+    }
+
+    async function loadMessage() {
+      try {
+        const [msg, count, last] = await Promise.all([
+          contract.getMessage(), contract.getUpdateCount(), contract.getLastUpdater()
+        ]);
+        $("message").textContent = msg;
+        $("count").textContent = count.toString();
+        $("lastUpdater").textContent = last === ethers.ZeroAddress ? "nobody yet (deployer's default message)" : last;
+      } catch (err) {
+        setStatus("Could not read contract. Check the address and network. " + (err.shortMessage || err.message), "err");
+      }
+    }
+
+    async function updateMessage() {
+      const text = $("newMessage").value.trim();
+      if (!text) { setStatus("Please type a message first.", "err"); return; }
+      $("updateBtn").disabled = true;
+      try {
+        setStatus("Waiting for you to confirm in MetaMask...", "");
+        const tx = await contract.updateMessage(text);
+        setStatus("Transaction sent: " + tx.hash + " - waiting for confirmation...", "");
+        const receipt = await tx.wait();
+        setStatus("Confirmed in block " + receipt.blockNumber + " | tx hash: " + tx.hash +
+                  " | gas used: " + receipt.gasUsed.toString(), "ok");
+        $("newMessage").value = "";
+        await loadMessage();
+      } catch (err) {
+        setStatus("Transaction failed: " + (err.shortMessage || err.message), "err");
+      } finally {
+        $("updateBtn").disabled = false;
+      }
+    }
+
+    $("connectBtn").addEventListener("click", connect);
+    $("refreshBtn").addEventListener("click", loadMessage);
+    $("updateBtn").addEventListener("click", updateMessage);
+
+    if (window.ethereum) {
+      window.ethereum.on("accountsChanged", () => location.reload());
+      window.ethereum.on("chainChanged", () => location.reload());
+    }
+  </script>
+</body>
+</html>
